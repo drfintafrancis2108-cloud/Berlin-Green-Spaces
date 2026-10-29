@@ -1,0 +1,732 @@
+---
+title: "Land Use and Green/Open Spaces in Berlin"
+subtitle: "A descriptive analysis using QGIS and R"
+author: "Finta Francis"
+date: "29 October 2026"
+output:
+html_document:
+toc: true
+toc_depth: 3
+number_sections: true
+theme: readable
+---------------
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 9,
+  fig.height = 6,
+  fig.align = "center"
+)
+
+library(readr)
+library(dplyr)
+library(ggplot2)
+
+land_use_summary <- read_csv(
+  "berlin_land_use_by_district_2021.csv"
+)
+```
+
+# 1. Introduction
+
+Urban green and open spaces can include forests, parks, allotment gardens, meadows, and other vegetated areas. Understanding their distribution across urban districts is relevant to research on environmental conditions, urban planning, and potential inequalities in access to green environments.
+
+This project uses land-use data from the Berlin Environmental Atlas to explore how recorded land-use areas are distributed across Berlin's twelve administrative districts. QGIS was used for initial spatial data exploration, mapping, geometry validation, and investigation of overlapping areas. R was subsequently used for descriptive summaries, visualisations, and a sensitivity analysis based on alternative definitions of green/open space.
+
+The project is an initial exploratory analysis. It does not directly measure residents' access to green spaces, the quality of those spaces, or their effects on health.
+
+## 1.1 Research questions
+
+This project addresses five research questions:
+
+1. **Data structure:** How are mapped land-use features distributed across Berlin districts and land-use categories?
+2. **Recorded area:** Which land-use categories contribute the largest summed recorded areas, and how do their average recorded areas per feature differ?
+3. **District comparisons:** Which districts have the largest and smallest recorded areas in selected green/open-space categories?
+4. **Area coverage:** How do the summed recorded areas compare with the official administrative areas of Berlin's districts?
+5. **Sensitivity analysis:** How much do district-level green/open-space estimates change when additional land-use categories are included?
+
+The fifth question is particularly important because the estimated area depends on how green/open space is defined.
+
+# 2. Data source and preprocessing
+
+## 2.1 Data source
+
+The analysis uses the Berlin Environmental Atlas land-use and green/open-space inventory for 2021.
+
+The original dataset was downloaded in GeoPackage format and imported into QGIS.
+
+| Data characteristic         | Description                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------- |
+| Source                      | Berlin Environmental Atlas                                                      |
+| Dataset                     | Land-use and green/open-space inventory, 2021                                   |
+| Original layer              | `b_gruen_und_freiflaechenbestand_2021`                                          |
+| File format                 | GeoPackage (`.gpkg`)                                                            |
+| Coordinate reference system | EPSG:25833 — ETRS89 / UTM zone 33N                                              |
+| Number of spatial features  | 26,397                                                                          |
+| Area field                  | `flalle`, recorded area in square metres according to the dataset documentation |
+
+The `flalle` field was used for the area summaries. The analysis assumes that its values are comparable across records, while recognising that a spot check of two features is not sufficient to verify every recorded area.
+
+## 2.2 QGIS preprocessing workflow
+
+The following steps were completed in QGIS before the summary data were analysed in R.
+
+**Step 1 — Load and explore the spatial data.**
+
+The original GeoPackage layer was loaded into QGIS. Its attribute table and relevant fields were inspected, including `schluessel`, `bezirk`, `enutzung`, and `flalle`.
+
+**Step 2 — Create a thematic map.**
+
+A thematic map was prepared to visualise land-use and green/open-space categories across Berlin. The map was exported as a PNG for project documentation.
+
+**Step 3 — Check geometry validity.**
+
+The QGIS Processing Toolbox's *Check validity* algorithm returned:
+
+* Valid features: 26,397
+* Invalid features: 0
+* Processing errors: 0
+
+All features passed the selected geometry-validity check. This result concerns the validity of individual geometries; it does not establish that different polygons cannot overlap.
+
+**Step 4 — Inspect recorded and calculated areas.**
+
+The `flalle` field was compared with the QGIS-calculated geometry area for two sample features.
+
+| Feature ID | Recorded `flalle` (m²) | Calculated geometry area (m²) |
+| ---------- | ---------------------: | ----------------------------: |
+| 1992       |              2,244.310 |                     2,244.278 |
+| 1996       |              4,646.920 |                     4,646.857 |
+
+The values were closely aligned in these two examples. This was a spot check, not a validation of every feature.
+
+**Step 5 — Investigate overlapping areas.**
+
+An overlap investigation was carried out in QGIS, and an overlapping area was identified and removed. This was a corrective preprocessing step. The analysis should not be interpreted as proof that every possible overlap in the dataset has been eliminated unless the corrected, saved layer has been comprehensively checked.
+
+**Step 6 — Prepare a summary table.**
+
+QGIS was used to summarise `flalle` by district (`bezirk`) and land-use category (`enutzung`) using the *Statistics by categories* tool. The resulting summary was exported to CSV for analysis in R.
+
+The CSV contains aggregated statistics rather than the original polygon geometries. Therefore, the R analysis describes the supplied summary data; it does not independently verify spatial overlaps or polygon boundaries.
+
+## 2.3 Analytical approach
+
+The analysis proceeds in stages:
+
+1. Inspect missing values and duplicate district–category combinations.
+2. Describe the number of mapped features by district and category.
+3. Compare summed and average recorded areas by land-use category.
+4. Explore selected green/open-space categories by district.
+5. Compare summed recorded areas with official district areas.
+6. Conduct a sensitivity analysis using narrow and broad category definitions.
+
+Area values are converted from square metres to hectares where appropriate:
+
+$$
+1\text{ hectare} = 10{,}000\text{ m}^2
+$$
+
+# 3. Import and data-quality checks
+
+## 3.1 Load the summary dataset
+
+The CSV is imported as `land_use_summary`. Each row represents a district–category summary rather than an individual polygon.
+
+```{r import-data}
+# Inspect the structure of the imported dataset
+glimpse(land_use_summary)
+
+# Check the district names
+unique(land_use_summary$bezirk)
+```
+
+## 3.2 Check missing values and duplicate combinations
+
+Before conducting the descriptive analysis, we examine missing values and check whether a district–category combination appears more than once.
+
+```{r checking}
+# Check missing values in each column
+colSums(is.na(land_use_summary))
+
+# Check whether district-category combinations are duplicated
+land_use_summary |>
+  count(bezirk, enutzung) |>
+  filter(n > 1)
+```
+
+No missing values or duplicate district–category combinations were reported in the supplied summary table.
+
+These checks concern the summary CSV. They do not establish that the original spatial layer has no duplicate geometries, missing spatial features, or overlapping polygons.
+
+# 4. Descriptive analysis of mapped land use
+
+## 4.1 How many mapped features are recorded in each district?
+
+The first analysis compares the number of mapped features represented in each district. The `count` field records the number of source features contributing to each district–category summary.
+
+```{r plot1}
+district_features <- land_use_summary |>
+  group_by(bezirk) |>
+  summarise(
+    total_features = sum(count, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(total_features))
+
+ggplot(
+  district_features,
+  aes(
+    x = reorder(bezirk, total_features),
+    y = total_features
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Mapped Land-Use Features Across Berlin Districts",
+    subtitle = "Berlin Environmental Atlas inventory, 2021",
+    x = "Berlin district",
+    y = "Number of mapped features",
+    caption = "Source: Berlin Environmental Atlas, 2021"
+  ) +
+  theme_minimal()
+```
+
+### Interpretation
+
+The chart describes how the number of mapped features varies across districts. A district with more features does not necessarily have a larger land area: the number of records depends on how the land has been divided into mapped features.
+
+Feature counts should therefore be interpreted separately from the summed recorded area.
+
+## 4.2 Which land-use categories have the most mapped features?
+
+The next analysis compares the number of mapped features across land-use categories.
+
+```{r plot2}
+category_features <- land_use_summary |>
+  group_by(enutzung) |>
+  summarise(
+    total_features = sum(count, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(total_features)
+
+ggplot(
+  category_features,
+  aes(
+    x = reorder(enutzung, total_features),
+    y = total_features
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Mapped Land-Use Features by Category in Berlin",
+    subtitle = "Berlin Environmental Atlas inventory, 2021",
+    x = "Land-use category",
+    y = "Number of mapped features",
+    caption = "Source: Berlin Environmental Atlas, 2021"
+  ) +
+  theme_minimal()
+```
+
+### Interpretation
+
+This chart identifies categories represented by many mapped features and those represented by fewer features. However, a high feature count does not necessarily imply a large total area. Many small features can collectively cover less land than a few large features.
+
+## 4.3 Which categories have the largest summed recorded areas?
+
+The `flalle` values are summed across districts for each land-use category. These values are presented as recorded areas, with the unit interpreted as square metres according to the dataset documentation.
+
+```{r comparing-flalle}
+category_totals <- land_use_summary |>
+  group_by(enutzung) |>
+  summarise(
+    total_features = sum(count, na.rm = TRUE),
+    total_flalle = sum(sum, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(total_flalle))
+
+print(category_totals, n = Inf)
+
+ggplot(
+  category_totals,
+  aes(
+    x = reorder(enutzung, total_flalle),
+    y = total_flalle
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Summed Recorded Area by Land-Use Category",
+    subtitle = "Berlin Environmental Atlas inventory, 2021",
+    x = "Land-use category",
+    y = "Summed recorded area (m²)",
+    caption = "Source: Berlin Environmental Atlas, 2021"
+  ) +
+  theme_minimal()
+```
+
+### Interpretation
+
+Housing areas have the largest summed recorded area in the supplied summary, while forest also accounts for a substantial recorded area.
+
+This comparison shows why both feature counts and area values are useful. A category can contain relatively few features but still have a large summed recorded area.
+
+## 4.4 How does the average recorded area per feature differ by category?
+
+To explore differences in the typical size of mapped features, the summed recorded area is divided by the number of contributing features.
+
+```{r average-flalle}
+category_comparison <- land_use_summary |>
+  group_by(enutzung) |>
+  summarise(
+    total_features = sum(count, na.rm = TRUE),
+    total_flalle = sum(sum, na.rm = TRUE),
+    mean_flalle_per_feature = total_flalle / total_features,
+    .groups = "drop"
+  ) |>
+  arrange(desc(mean_flalle_per_feature))
+
+print(category_comparison, n = Inf)
+```
+
+```{r visualize-average}
+ggplot(
+  category_comparison,
+  aes(
+    x = reorder(enutzung, mean_flalle_per_feature),
+    y = mean_flalle_per_feature
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Average Recorded Area per Mapped Feature",
+    subtitle = "Berlin Environmental Atlas inventory, 2021",
+    x = "Land-use category",
+    y = "Mean recorded area per feature (m²)",
+    caption = "Source: Berlin Environmental Atlas, 2021"
+  ) +
+  theme_minimal()
+```
+
+### Interpretation
+
+The average recorded area per feature helps distinguish categories that consist of many relatively small mapped features from those with fewer, larger features.
+
+The descriptive results indicate that housing areas contribute many mapped features, whereas farmland has a high average recorded area per feature. Forest also has a substantially larger average recorded area per feature than housing.
+
+These averages are calculated from aggregated counts and area values. They do not describe the full distribution of individual polygon sizes, and they can be influenced by unusually large features.
+
+## 4.5 What percentage of the total summed recorded area does each category contribute?
+
+The following calculation estimates each category's percentage contribution to the total of the recorded `flalle` values in the supplied summary table.
+
+```{r percentage}
+category_shares <- category_comparison |>
+  mutate(
+    share_percent =
+      100 * total_flalle / sum(total_flalle, na.rm = TRUE)
+  ) |>
+  arrange(desc(share_percent))
+
+print(
+  category_shares |>
+    select(enutzung, total_flalle, share_percent),
+  n = Inf
+)
+```
+
+### Interpretation
+
+Three results stand out in the current summary:
+
+* **Housing area — approximately 30.3%:** the largest contribution to the summed recorded area.
+* **Forest — approximately 20.3%:** the second-largest contribution.
+* **Park / green space — approximately 7.55%:** a distinct land-use category, not a comprehensive measure of all green environments.
+
+The 7.55% figure must not be interpreted as the percentage of Berlin that is green. Forests, allotment gardens, meadows, fallow areas and other categories may also represent vegetated environments.
+
+These percentages describe the composition of the summed recorded values in the supplied dataset, rather than independently verified proportions of Berlin's total land area.
+
+# 5. Recorded land-use area in hectares
+
+## 5.1 Convert recorded area to hectares
+
+For easier interpretation, the recorded area is converted from square metres to hectares. The conversion is applied to the summary values, and the resulting values are used in the subsequent area comparisons.
+
+```{r spatial-analysis}
+# Convert square metres to hectares
+land_use_summary <- land_use_summary |>
+  mutate(
+    total_hectares = sum / 10000
+  )
+
+# Display the largest land-use categories by recorded area
+land_use_summary |>
+  group_by(enutzung) |>
+  summarise(
+    total_hectares = sum(total_hectares, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(total_hectares))
+
+category_area <- land_use_summary |>
+  group_by(enutzung) |>
+  summarise(
+    total_hectares = sum(sum, na.rm = TRUE) / 10000,
+    .groups = "drop"
+  ) |>
+  arrange(desc(total_hectares))
+
+ggplot(
+  category_area,
+  aes(
+    x = reorder(enutzung, total_hectares),
+    y = total_hectares
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Recorded Land-Use Area by Category in Berlin",
+    subtitle = "Berlin Environmental Atlas inventory, 2021",
+    x = "Land-use category",
+    y = "Recorded area (hectares)",
+    caption = "Source: Berlin Environmental Atlas, 2021"
+  ) +
+  theme_minimal()
+```
+
+### Interpretation
+
+Forest occupies substantially more recorded area than the category specifically labelled *Park / green space*. This highlights the importance of the land-use classification when studying urban green environments.
+
+The chart alone does not establish what percentage of Berlin is green, whether the city has sufficient green space, or whether residents can access it easily. Those questions require additional information and, for spatial coverage estimates, appropriate validation of the mapped area.
+
+# 6. District-level analysis of green/open space
+
+## 6.1 Define the selected green/open-space categories
+
+For the first district-level analysis, seven land-use categories are selected as an operational definition of green/open space.
+
+```{r district-green}
+green_categories <- c(
+  "Forest",
+  "Park / green space",
+  "Allotment garden",
+  "Meadow and pasture",
+  "Fallow area, meadow-like vegetation",
+  "Fallow area, mixed vegetation - meadows, trees, bushes",
+  "Tree nursery / horticulture"
+)
+
+green_by_district <- land_use_summary |>
+  filter(enutzung %in% green_categories) |>
+  group_by(bezirk) |>
+  summarise(
+    green_hectares = sum(sum, na.rm = TRUE) / 10000,
+    .groups = "drop"
+  ) |>
+  arrange(desc(green_hectares))
+
+print(green_by_district)
+```
+
+This definition includes selected categories that represent vegetation or green/open land. It is an analytical choice for this project, rather than an official or exhaustive definition of green space.
+
+Water bodies are kept separate as blue space. Other categories, such as cemeteries and city squares, are considered in the broader definition used in the sensitivity analysis.
+
+## 6.2 Which districts have the largest and smallest recorded areas in the selected categories?
+
+```{r district-green-plot}
+ggplot(
+  green_by_district,
+  aes(
+    x = reorder(bezirk, green_hectares),
+    y = green_hectares
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Recorded Green/Open-Space Area by Berlin District",
+    subtitle = "Seven selected land-use categories, 2021",
+    x = "Berlin district",
+    y = "Recorded area (hectares)",
+    caption = "Source: Berlin Environmental Atlas, 2021"
+  ) +
+  theme_minimal()
+```
+
+### Interpretation
+
+The initial results show that:
+
+* **Treptow-Köpenick** has the largest recorded area in the selected categories, at approximately 8,764 hectares.
+* **Friedrichshain-Kreuzberg** has the smallest, at approximately 207 hectares.
+* **Mitte** also has a relatively small recorded area, at approximately 641 hectares.
+
+These are comparisons of absolute recorded area. They do not necessarily indicate which district has the highest proportion of its land area classified as green/open space. Differences in district size must also be considered.
+
+## 6.3 How do total recorded areas compare with official district areas?
+
+Before calculating a proportion, it is useful to compare the sum of all recorded land-use categories with the official administrative area of each district.
+
+```{r district-area-totals}
+land_use_summary |>
+  group_by(bezirk) |>
+  summarise(
+    total_recorded_hectares = sum(sum, na.rm = TRUE) / 10000,
+    .groups = "drop"
+  ) |>
+  arrange(desc(total_recorded_hectares))
+```
+
+The following district areas are used for an exploratory comparison. They are rounded values and should be checked against the relevant official Statistics Berlin-Brandenburg publication before the results are used as formal estimates.
+
+```{r verification}
+district_areas <- tibble::tribble(
+  ~bezirk, ~district_hectares,
+  "Mitte", 3940,
+  "Friedrichshain-Kreuzberg", 2040,
+  "Pankow", 10322,
+  "Charlottenburg-Wilmersdorf", 6469,
+  "Spandau", 9188,
+  "Steglitz-Zehlendorf", 10256,
+  "Tempelhof-Schöneberg", 5305,
+  "Neukölln", 4493,
+  "Treptow-Köpenick", 16773,
+  "Marzahn-Hellersdorf", 6182,
+  "Lichtenberg", 5212,
+  "Reinickendorf", 8932
+)
+
+area_check <- land_use_summary |>
+  group_by(bezirk) |>
+  summarise(
+    total_recorded_hectares = sum(sum, na.rm = TRUE) / 10000,
+    .groups = "drop"
+  ) |>
+  left_join(district_areas, by = "bezirk") |>
+  mutate(
+    difference_hectares =
+      district_hectares - total_recorded_hectares
+  )
+
+print(area_check)
+```
+
+### Interpretation
+
+The summed recorded areas are lower than the corresponding administrative areas in this comparison.
+
+This difference does not, by itself, prove that the dataset is incorrect. Possible explanations include the scope of the inventory, classification rules, excluded areas, or differences between the mapped land-use inventory and the administrative area figures.
+
+The comparison is a diagnostic check. It does not establish why the differences occur.
+
+## 6.4 What proportion of each district's area is represented by the summed recorded area?
+
+The next calculation expresses the total recorded area as a percentage of the administrative area.
+
+```{r recorded-area-share}
+area_check <- area_check |>
+  mutate(
+    recorded_area_share = 100 *
+      total_recorded_hectares / district_hectares
+  ) |>
+  arrange(desc(recorded_area_share))
+
+print(area_check)
+```
+
+The resulting percentage is the proportion represented by the **summed recorded area** relative to the supplied district-area figure. It should not automatically be interpreted as the proportion of the district covered by unique land.
+
+In particular, this calculation is not a direct estimate of green-space coverage because the numerator includes all land-use categories. It is also sensitive to the completeness of the inventory and whether overlapping areas have been comprehensively resolved.
+
+## 6.5 Reconfirm district totals
+
+For transparency, the district totals can also be displayed in square metres and hectares.
+
+```{r reconfirming}
+district_totals <- land_use_summary |>
+  group_by(bezirk) |>
+  summarise(
+    total_recorded_m2 = sum(sum, na.rm = TRUE),
+    total_recorded_ha = total_recorded_m2 / 10000,
+    .groups = "drop"
+  ) |>
+  arrange(desc(total_recorded_ha))
+
+print(district_totals)
+```
+
+This is a second presentation of the same underlying recorded-area values, not an independent spatial validation.
+
+# 7. Sensitivity analysis: alternative definitions of green/open space
+
+## 7.1 Why conduct a sensitivity analysis?
+
+There is no single category list in this exploratory project that automatically captures every possible form of green/open space. The result may depend on whether categories such as cemeteries, city squares, promenades, and weekend cottage/allotment-garden-type areas are included.
+
+A sensitivity analysis addresses this issue by comparing two operational definitions while keeping the underlying dataset and district groupings unchanged.
+
+* **Narrow definition:** the seven selected categories listed in Section 6.1.
+* **Broad definition:** the same seven categories, plus cemeteries, city squares/prom­enades, and weekend cottage/allotment-garden-type areas.
+
+This comparison assesses the effect of changing the category inclusion rules. It does not measure change over time.
+
+## 7.2 Calculate the broader estimate
+
+```{r broad-green}
+broad_green_categories <- c(
+  green_categories,
+  "Cemetery",
+  "City square / promenade",
+  "Weekend cottage / allotment-garden-type area"
+)
+
+broad_green_by_district <- land_use_summary |>
+  filter(enutzung %in% broad_green_categories) |>
+  group_by(bezirk) |>
+  summarise(
+    broad_green_hectares = sum(sum, na.rm = TRUE) / 10000,
+    .groups = "drop"
+  )
+```
+
+## 7.3 Compare narrow and broad definitions
+
+For each district, we calculate:
+
+* The area under the narrow definition.
+* The area under the broad definition.
+* The absolute difference in hectares.
+* The percentage increase relative to the narrow definition.
+
+The percentage increase is calculated as:
+
+$$
+\text{Percentage increase} =
+\frac{\text{Broad area} - \text{Narrow area}}
+{\text{Narrow area}} \times 100
+$$
+
+```{r sensitivity-analysis}
+sensitivity_results <- green_by_district |>
+  left_join(broad_green_by_district, by = "bezirk") |>
+  mutate(
+    absolute_change_ha = broad_green_hectares - green_hectares,
+    percentage_change = 100 *
+      absolute_change_ha / green_hectares
+  ) |>
+  select(
+    bezirk,
+    green_hectares,
+    broad_green_hectares,
+    absolute_change_ha,
+    percentage_change
+  ) |>
+  arrange(desc(percentage_change))
+
+print(sensitivity_results, n = Inf)
+```
+
+## 7.4 Visualise the relative increase
+
+```{r sensitivity-plot}
+ggplot(
+  sensitivity_results,
+  aes(
+    x = reorder(bezirk, percentage_change),
+    y = percentage_change
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Sensitivity of Green/Open-Space Estimates",
+    subtitle = "Percentage increase under the broader category definition",
+    x = "Berlin district",
+    y = "Increase relative to narrow definition (%)",
+    caption = paste(
+      "Source: Berlin Environmental Atlas, 2021.",
+      "Estimates are based on summed category areas."
+    )
+  ) +
+  theme_minimal()
+```
+
+## 7.5 Interpretation of the sensitivity analysis
+
+The sensitivity analysis shows that the summed area estimates vary across Berlin districts according to which land-use categories are included. Adding cemeteries, city squares and promenades, and weekend cottage/allotment-garden-type areas increased the estimates in all twelve districts.
+
+The relative increase ranged from approximately **2.0% in Treptow-Köpenick** to **27.6% in Friedrichshain-Kreuzberg**. Pankow showed the largest absolute increase, at approximately **570 hectares**, whereas Friedrichshain-Kreuzberg showed an increase of approximately **57 hectares**.
+
+These results illustrate why absolute and relative changes should be considered together. A district can show a relatively small absolute increase but a substantial percentage increase when its narrow-definition estimate is small.
+
+The findings indicate that the estimated area is sensitive to category selection. However, these are differences in summed recorded areas, not verified changes in unique green-space coverage. They should be interpreted alongside the dataset's classification rules, spatial overlap checks, and coverage limitations.
+
+# 8. Overall findings
+
+This exploratory project used QGIS and R to describe land-use patterns and examine how selected green/open-space estimates vary across Berlin's districts.
+
+The main findings are:
+
+1. **Mapped features vary across categories and districts.** Feature counts and recorded areas provide different information: a category with many mapped features does not necessarily occupy the largest area.
+
+2. **Housing and forest account for substantial recorded areas.** In the supplied summary, housing has the largest contribution to the summed recorded area, while forest contributes more than the category specifically labelled Park / green space.
+
+3. **Absolute green/open-space estimates vary by district.** Treptow-Köpenick has the largest recorded area under the narrow category definition, while Friedrichshain-Kreuzberg has the smallest.
+
+4. **Recorded area is not the same as verified district coverage.** Summed recorded areas are lower than the administrative areas used for comparison. The differences require further investigation and do not, on their own, identify the cause.
+
+5. **Category selection affects the results.** Including additional land-use categories increases the estimates in every district, with different absolute and relative increases.
+
+# 9. Limitations and next steps
+
+## 9.1 Limitations
+
+Several limitations should be considered when interpreting the results.
+
+* **Operational category definitions:** The narrow and broad lists are analytical choices for this project, not official or exhaustive measures of green space.
+* **Geometry validation:** All 26,397 features passed the selected QGIS validity check, but geometry validity does not establish the absence of overlaps.
+* **Overlap correction:** An overlapping area was investigated and removed in QGIS. The summary CSV does not independently establish that all possible overlaps were resolved in the final saved spatial layer.
+* **Area-field verification:** The `flalle` and calculated geometry areas were closely aligned for two sample features only. This does not verify the entire dataset.
+* **Administrative coverage:** The summed recorded areas do not equal the supplied official district areas. The reason for the differences has not been established.
+* **Aggregated data:** The CSV contains district–category summaries rather than the original polygons. Spatial relationships cannot be fully re-evaluated from this file alone.
+* **No population denominator:** Absolute hectares do not account for the number of residents in each district.
+* **No accessibility analysis:** The project does not assess walking distance, public transport access, barriers, quality, or distribution of green spaces within districts.
+* **Single-year analysis:** The inventory describes 2021. The sensitivity analysis compares definitions, not changes between years.
+
+## 9.2 Suggested next steps
+
+Further work could improve the validity and usefulness of the analysis:
+
+1. Verify the final saved GeoPackage after the overlap correction and document the exact overlap-checking method and output.
+2. Confirm the `flalle` field definition and compare recorded area with calculated polygon area across a larger sample or the full dataset.
+3. Investigate the differences between summed recorded areas and official district areas using the original spatial layer and appropriate administrative boundaries.
+4. Obtain verified district population data to explore green/open-space area per resident.
+5. If suitable spatial and population data are available, investigate proximity or accessibility to green spaces rather than relying only on district-level totals.
+6. For a temporal analysis, obtain comparable land-use data from additional years and assess whether classification and measurement methods are consistent.
+
+# 10. Conclusion
+
+This project provides an initial, reproducible descriptive workflow for exploring Berlin's 2021 land-use inventory using QGIS and R. It combines spatial data exploration, geometry validation, area summaries, visualisation, district-level comparisons, and a sensitivity analysis of alternative green/open-space definitions.
+
+The analysis highlights the importance of defining green/open space explicitly and distinguishing summed recorded area from verified spatial coverage. The results are useful as an exploratory starting point, but stronger conclusions about actual coverage, population-level availability, or accessibility require further spatial validation and additional data.
+
+## Data source and documentation
+
+**Berlin Environmental Atlas:** Land-use and green/open-space inventory, 2021.
+
+**Dataset documentation:** [Data format description for land use from 2021 onwards](https://gdi.berlin.de/data/ua_flaechennutzung/docs/datenformatbeschreibung_Flaechennutzung_ab_2021.pdf).
+
+**Project methods:** QGIS preprocessing and mapping, followed by descriptive and sensitivity analyses in R.
