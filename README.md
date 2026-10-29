@@ -37,3 +37,7 @@ This is an exploratory mapping exercise, not a completed environmental exposure 
 
 - QGIS
 - Berlin Environmental Atlas
+
+## Map output
+
+![Berlin land-use map](berlin_land_use_map.png)
